@@ -102,14 +102,12 @@ refine(M) ->
 	    refine(NewM)
     end.
 
-refine_rows(M) ->
-    lists:map(fun refine_row/1,M).
+% refine_rows(M) ->
+%     lists:map(fun refine_row/1,M).
 
-refine_rows_par (M) -> 
-    Pids = lists:map(fun(Row) -> spawn_link(fun() -> refine_row(Row) end) end, M).
-    % lists:foreach(fun(Pid) -> receive _ -> ok end end, Pids),
-    % [erlang:join(Pid) || Pid <- Pids],
-    % M.
+refine_rows(M) -> 
+    % Pids = lists:map(fun(Row) -> spawn_link(fun() -> refine_row(Row) end) end, M).
+    pmap (fun(Row) -> refine_row(Row) end, M).
         
   
 %% takes a Sudoku grid and applies the refine_row function to each row, which updates any list of possible values for an empty cell by removing any values that are not possible based on the contents of the row, column, and block that the cell is in
