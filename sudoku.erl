@@ -108,6 +108,7 @@ refine_rows(M) ->
 refine_rows_par (M) -> 
     Pids = lists:map(fun(Row) -> spawn_link(fun() -> refine_row(Row) end) end, M).
     % lists:foreach(fun(Pid) -> receive _ -> ok end end, Pids),
+    % [erlang:join(Pid) || Pid <- Pids],
     % M.
         
   
@@ -248,8 +249,22 @@ benchmarks(Puzzles) ->
 
 benchmarks() ->
   {ok,Puzzles} = file:consult("problems.txt"),
-  timer:tc(?MODULE,benchmarks,[Puzzles]).
-		      
+  timer:tc(?MODULE,pbenchmarks,[Puzzles]).
+
+
+pbenchmarks(Puzzles) ->
+    pmap(fun({Name, M}) -> {Name, bm(fun() -> solve(M) end)} end, Puzzles).
+
+pmap(F, L) ->
+    Parent = self(),                    %% identifies process
+    Mapper = fun(X) ->
+        spawn(fun() ->
+            Parent ! {self(), F(X)}
+        end)
+    end,
+    Pids = [Mapper(X) || X <- L],
+    [receive {Pid, Result} -> Result end || Pid <- Pids].
+
 %% check solutions for validity
 
 valid_rows(M) ->
