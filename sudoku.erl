@@ -101,11 +101,12 @@ refine(M) ->
 	    refine(NewM)
     end.
 
-refine_rows(M) ->
-    lists:map(fun refine_row/1,M).
+% refine_rows(M) ->
+%     lists:map(fun refine_row/1,M).
 
-% refine_rows(M) -> 
-%      pmap (fun refine_row/1, M).
+refine_rows(M) ->
+    pmap(fun refine_row/1,M).
+
         
   
 %% takes a Sudoku grid and applies the refine_row function to each row, which updates any list of possible values for an empty cell by removing any values that are not possible based on the contents of the row, column, and block that the cell is in
@@ -176,7 +177,14 @@ guess(M) ->
 
 guesses(M) ->
     {I,J,Guesses} = guess(M),
-    Ms = [catch refine(update_element(M,I,J,G)) || G <- Guesses],
+    io:format("before refine"),
+    % Ms = [catch refine(update_element(M,I,J,G)) || G <- Guesses],
+    Ms = [try refine(update_element(M,I,J,G)) of
+            Result -> Result
+          catch
+            exit:Reason -> {'EXIT', no_solution, Reason}
+          end || G <- Guesses],
+    io:format("after refine"),
     SortedGuesses =
 	lists:sort(
 	  [{hard(NewM),NewM}
@@ -204,26 +212,34 @@ solve(M) ->
     Solution = solve_refined(refine(fill(M))),
     case valid_solution(Solution) of
 	true ->
+      io:format("Solution reached~n"),
 	    Solution;
 	false ->
 	    exit({invalid_solution,Solution})
     end.
 
 solve_refined(M) ->
-  case solved(M) of
+  case solved(M) of 
 	true ->
 	    M;
 	false ->
+      io:format("We need to guess~n"),
+      io:format("idk lol"),
+      io:format("gm: ~p~n",[guesses(M)]),
+      io:format("cool lol"),
 	    solve_one(guesses(M))
     end.
 
 solve_one([]) ->
     exit(no_solution);
 solve_one([M]) ->
+    io:format("Solving 1~n"),
     solve_refined(M);
 solve_one([M|Ms]) ->
+    io:format("Solving 1 of many!~n"),
     case catch solve_refined(M) of
-	{'EXIT',no_solution} ->
+	{'EXIT', no_solution} ->
+      io:format("Guess failed~n"),
 	    solve_one(Ms);
 	Solution ->
 	    Solution
@@ -245,7 +261,7 @@ benchmarks(Puzzles) ->
 
 benchmarks() ->
   {ok,Puzzles} = file:consult("problems.txt"),
-  timer:tc(?MODULE,pbenchmarks,[Puzzles]).
+  timer:tc(?MODULE,benchmarks,[Puzzles]).
 
 
 pbenchmarks(Puzzles) ->
@@ -260,7 +276,7 @@ pbenchmarks(Puzzles) ->
 %     end,
 %     Pids = [Mapper(X) || X <- L],
 %     [receive {Pid, Result} -> Result end || Pid <- Pids].
-%
+
 pmap(F, L) ->
     Parent = self(),
     Mapper = fun(X) ->
@@ -281,6 +297,7 @@ pmap(F, L) ->
         {Pid, {error, Reason}} ->
             exit({error, Reason})
      end || Pid <- Pids].
+
 
 %% check solutions for validity
 
