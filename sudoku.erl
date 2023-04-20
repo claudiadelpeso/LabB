@@ -88,8 +88,7 @@ fill(M) ->
 
 %%takes a Sudoku grid and repeatedly applies the refine_rows function to it until no further changes can be made. 
 refine(M) ->
-    NewM =
-	refine_rows(
+    NewM = refine_rows(
 	  transpose(
 	    refine_rows(
 	      transpose(
@@ -102,12 +101,11 @@ refine(M) ->
 	    refine(NewM)
     end.
 
-% refine_rows(M) ->
-%     lists:map(fun refine_row/1,M).
+refine_rows(M) ->
+    lists:map(fun refine_row/1,M).
 
-refine_rows(M) -> 
-    % Pids = lists:map(fun(Row) -> spawn_link(fun() -> refine_row(Row) end) end, M).
-    pmap (fun(Row) -> refine_row(Row) end, M).
+% refine_rows(M) -> 
+%      pmap (fun refine_row/1, M).
         
   
 %% takes a Sudoku grid and applies the refine_row function to each row, which updates any list of possible values for an empty cell by removing any values that are not possible based on the contents of the row, column, and block that the cell is in
@@ -212,7 +210,7 @@ solve(M) ->
     end.
 
 solve_refined(M) ->
-    case solved(M) of
+  case solved(M) of
 	true ->
 	    M;
 	false ->
@@ -253,15 +251,36 @@ benchmarks() ->
 pbenchmarks(Puzzles) ->
     pmap(fun({Name, M}) -> {Name, bm(fun() -> solve(M) end)} end, Puzzles).
 
+% pmap(F, L) ->
+%     Parent = self(),                    %% identifies process
+%     Mapper = fun(X) ->
+%         spawn(fun() ->
+%             Parent ! {self(), F(X)}
+%         end)
+%     end,
+%     Pids = [Mapper(X) || X <- L],
+%     [receive {Pid, Result} -> Result end || Pid <- Pids].
+%
 pmap(F, L) ->
-    Parent = self(),                    %% identifies process
+    Parent = self(),
     Mapper = fun(X) ->
         spawn(fun() ->
-            Parent ! {self(), F(X)}
+            try
+                Result = F(X),
+                Parent ! {self(), {ok, Result}}
+            catch
+                error:Reason ->
+                    Parent ! {self(), {error, Reason}}
+            end
         end)
     end,
     Pids = [Mapper(X) || X <- L],
-    [receive {Pid, Result} -> Result end || Pid <- Pids].
+    [receive
+        {Pid, {ok, Result}} ->
+            Result;
+        {Pid, {error, Reason}} ->
+            exit({error, Reason})
+     end || Pid <- Pids].
 
 %% check solutions for validity
 
