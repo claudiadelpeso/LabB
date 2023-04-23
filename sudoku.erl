@@ -101,13 +101,8 @@ refine(M) ->
 	    refine(NewM)
     end.
 
-% refine_rows(M) ->
-%     lists:map(fun refine_row/1,M).
-
 refine_rows(M) ->
-    pmap(fun refine_row/1,M).
-
-        
+    lists:map(fun refine_row/1,M).
   
 %% takes a Sudoku grid and applies the refine_row function to each row, which updates any list of possible values for an empty cell by removing any values that are not possible based on the contents of the row, column, and block that the cell is in
 refine_row(Row) ->
@@ -177,19 +172,19 @@ guess(M) ->
 
 guesses(M) ->
     {I,J,Guesses} = guess(M),
-    io:format("before refine"),
-    % Ms = [catch refine(update_element(M,I,J,G)) || G <- Guesses],
-    Ms = [try refine(update_element(M,I,J,G)) of
-            Result -> Result
-          catch
-            exit:Reason -> {'EXIT', no_solution, Reason}
-          end || G <- Guesses],
-    io:format("after refine"),
+    % Ms = case hard(M) >= 275 of
+    %          true ->
+    %              io:format("hard: ~p~n",[hard(M)]),
+    %              pmap(fun(X) -> catch refine(update_element(M,I,J,X)) end, Guesses);
+    %          false ->
+    %              [catch refine(update_element(M,I,J,G)) || G <- Guesses]
+    %      end,
+    Ms = [catch refine(update_element(M,I,J,G)) || G <- Guesses],
     SortedGuesses =
-	lists:sort(
-	  [{hard(NewM),NewM}
-	   || NewM <- Ms,
-	      not is_exit(NewM)]),
+	    lists:sort(
+	      [{hard(NewM),NewM}
+	    || NewM <- Ms,
+	       not is_exit(NewM)]),
     [G || {_,G} <- SortedGuesses].
 
 %%  takes a Sudoku grid and the position of an empty cell and a value to fill it with, and returns a new grid with the cell filled in.c(
@@ -209,10 +204,10 @@ update_nth(I,X,Xs) ->
 %% solve a puzzle
 
 solve(M) ->
-    Solution = solve_refined(refine(fill(M))),
+    Solution = solve_refined(M),
+    % Solution = solve_refined(refine(fill(M))),
     case valid_solution(Solution) of
 	true ->
-      io:format("Solution reached~n"),
 	    Solution;
 	false ->
 	    exit({invalid_solution,Solution})
@@ -223,23 +218,16 @@ solve_refined(M) ->
 	true ->
 	    M;
 	false ->
-      io:format("We need to guess~n"),
-      io:format("idk lol"),
-      io:format("gm: ~p~n",[guesses(M)]),
-      io:format("cool lol"),
 	    solve_one(guesses(M))
     end.
 
 solve_one([]) ->
     exit(no_solution);
 solve_one([M]) ->
-    io:format("Solving 1~n"),
     solve_refined(M);
 solve_one([M|Ms]) ->
-    io:format("Solving 1 of many!~n"),
     case catch solve_refined(M) of
 	{'EXIT', no_solution} ->
-      io:format("Guess failed~n"),
 	    solve_one(Ms);
 	Solution ->
 	    Solution
@@ -257,7 +245,7 @@ repeat(F) ->
     [F() || _ <- lists:seq(1,?EXECUTIONS)].
 
 benchmarks(Puzzles) ->
-    [{Name,bm(fun()->solve(M) end)} || {Name,M} <- Puzzles].
+    [{Name,bm(fun()->solve_top(M) end)} || {Name,M} <- Puzzles].
 
 benchmarks() ->
   {ok,Puzzles} = file:consult("problems.txt"),
@@ -267,26 +255,17 @@ benchmarks() ->
 pbenchmarks(Puzzles) ->
     pmap(fun({Name, M}) -> {Name, bm(fun() -> solve(M) end)} end, Puzzles).
 
-% pmap(F, L) ->
-%     Parent = self(),                    %% identifies process
-%     Mapper = fun(X) ->
-%         spawn(fun() ->
-%             Parent ! {self(), F(X)}
-%         end)
-%     end,
-%     Pids = [Mapper(X) || X <- L],
-%     [receive {Pid, Result} -> Result end || Pid <- Pids].
 
 pmap(F, L) ->
     Parent = self(),
     Mapper = fun(X) ->
-        spawn(fun() ->
+        spawn_link(fun() ->
             try
                 Result = F(X),
                 Parent ! {self(), {ok, Result}}
             catch
-                error:Reason ->
-                    Parent ! {self(), {error, Reason}}
+                _:_ ->
+                    Parent ! {self(), {error, no_solution}}
             end
         end)
     end,
@@ -295,9 +274,8 @@ pmap(F, L) ->
         {Pid, {ok, Result}} ->
             Result;
         {Pid, {error, Reason}} ->
-            exit({error, Reason})
+            {'EXIT', Reason}
      end || Pid <- Pids].
-
 
 %% check solutions for validity
 
@@ -309,3 +287,157 @@ valid_row(Row) ->
 
 valid_solution(M) ->
     valid_rows(M) andalso valid_rows(transpose(M)) andalso valid_rows(blocks(M)).
+
+%%%%%%%%%%%% Pool %%%%%%%%%%%%%%%%%
+
+solve_top(M) ->
+  Refined = refine(fill(M)),
+  case hard(Refined) >= 200 of
+    true ->
+      pool_solve(Refined);
+    false ->
+      solve(Refined)
+  end.
+
+
+pool_solve(M) ->
+    start_pool(erlang:system_info(schedulers)-1),
+    Parent = self(),
+    _ = spawn_link(fun() -> pool_solve_refined(M, Parent) end),
+    % _ = spawn_link(fun() -> pool_solve_refined(refine(fill(M)), Parent) end),
+    receive
+        {found_solution, Solution} ->
+            pool ! {stop, self()},
+            receive {pool, stopped} -> ok end,
+            case valid_solution(Solution) of
+                true ->
+                    Solution;
+                false ->
+                    exit({invalid_solution, Solution})
+            end
+    end.
+
+pool_solve_refined(M, P) ->
+    case solved(M) of
+        true ->
+          P ! {found_solution, M},
+          ok;
+        false ->
+          solve_one_pool(guesses(M), P),
+          ok
+    end.
+
+solve_one_pool(Ms, P) ->
+    Specs = [speculate_on_worker(fun() -> pool_solve_refined(M, P) end) || M <- Ms],
+    Diff = lists:sum(lists:map(fun(M) -> hard(M) end, Ms)),
+    if Diff >= 300 ->
+           io:format("Diff: ~p~n", [Diff]),
+           _ = pmap(fun(S) -> par_wait_for_solution(S) end, Specs),
+           exit(no_solution);
+       true ->
+           _ = wait_for_solution(Specs, P),
+           ok
+    end.
+    %_ = wait_for_solution(Specs, P),
+    %_ = pmap(fun(S) -> par_wait_for_solution(S) end, Specs),
+
+par_wait_for_solution(S) ->
+  case (catch worker_value_of(S)) of
+    {'EXIT', no_solution} ->
+      ok; 
+    Idk ->
+      ok
+    end.
+
+wait_for_solution([], _P) ->
+    exit(no_solution);
+
+wait_for_solution([S | Specs], P) ->
+  case (catch worker_value_of(S)) of
+    {'EXIT', no_solution} ->
+      wait_for_solution(Specs, P);
+    Idk ->
+      ok
+    end.
+
+
+
+start_pool(N) ->
+  true = register(pool,spawn_link(fun()->pool([worker() || _ <- lists:seq(1,N)])
+end)).
+
+pool(Workers) ->
+  pool(Workers,Workers).
+
+pool(Workers,All) ->
+  receive
+    {get_worker,Pid} ->
+      case Workers of
+        [] ->
+          Pid ! {pool,no_worker},
+          pool(Workers,All);
+        [W|Ws] ->
+          Pid ! {pool,W},
+          pool(Ws,All)
+      end;
+    {return_worker,W} ->
+      pool([W|Workers],All);
+    {stop,Pid} ->
+      [unlink(W) || W <- All],
+      [exit(W,kill) || W <- All],
+      unregister(pool),
+      Pid ! {pool,stopped}
+   end.
+
+worker() ->
+  spawn_link(fun work/0).
+
+work() ->
+  receive
+    {task,Pid,R,F} ->
+      try
+        Res = F(),
+        Pid ! {R, Res},
+        try
+          pool ! {return_worker,self()}
+        catch
+          error:Reason ->
+            io:format("Error returning worker to pool: ~p~n", [Reason])
+        end
+      catch
+        _:_ ->
+          Pid ! {R, {error, no_solution}},
+          try
+            pool ! {return_worker,self()}
+          catch
+            error:R2 ->
+              io:format("Error returning worker to pool: ~p~n", [R2])
+          end
+      end,
+      work()
+   end.
+
+speculate_on_worker(F) ->
+  case whereis(pool) of
+    undefined ->
+      ok; %% we're stopping
+    Pool -> Pool ! {get_worker,self()}
+   end,
+   receive
+    {pool,no_worker} ->
+      {not_speculating,F};
+    {pool,W} ->
+      R = make_ref(),
+      W ! {task,self(),R,F},
+      {speculating,R}
+   end.
+
+worker_value_of({not_speculating,F}) ->
+  F();
+worker_value_of({speculating,R}) ->
+  receive
+    {R,ok} ->
+      ok;
+    {R,{error, Reason}} ->
+      exit(no_solution)
+  end.
